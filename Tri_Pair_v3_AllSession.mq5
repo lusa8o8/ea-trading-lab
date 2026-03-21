@@ -21,6 +21,9 @@ input double TrailingStopATRMult = 1.2;
 input int    SessionStartHour    = 6;
 input int    SessionEndHour      = 17;
 input ulong  MagicNumber         = 123456;
+input bool   UseMAEGuard         = false;
+input double MAEGuardPct         = 70.0;
+input double MAEGuardTighten     = 60.0;
 
 //--- Indicator handles
 int ExtHandle  = INVALID_HANDLE; // MA
@@ -65,8 +68,9 @@ int      g_day_of_week           = 0;
 string   g_direction             = "";
 
 //--- Tick-by-tick MFE / MAE
-double g_mfe_pips = 0;
-double g_mae_pips = 0;
+double g_mfe_pips          = 0;
+double g_mae_pips          = 0;
+bool   g_mae_guard_applied = false;
 
 //--- Misc
 int    loss_counter        = 0;
@@ -131,6 +135,7 @@ void ResetTradeState()
    g_direction             = "";
    g_mfe_pips              = 0;
    g_mae_pips              = 0;
+   g_mae_guard_applied     = false;
    BreakEvenApplied        = false;
    TrailingStopActivated   = false;
    PartialExitApplied      = false;
@@ -264,6 +269,17 @@ void LogTradeToCSV(ulong deal_ticket)
       case DEAL_REASON_EXPERT: close_reason = TrailingStopActivated ? "TRAILING" : "EA_CLOSE";   break;
       case DEAL_REASON_CLIENT: close_reason = "MANUAL";                                           break;
       default:                 close_reason = "OTHER";                                            break;
+     }
+
+   //--- Override close reason to MAE_GUARD if the guard fired and exit is within 3 pips of tightened SL
+   if(g_mae_guard_applied && g_sl_price != 0)
+     {
+      double tighten_dist  = (MAEGuardTighten / 100.0) * MathAbs(g_entry_price - g_sl_price);
+      double mae_guard_sl  = (g_direction == "BUY")
+                             ? g_entry_price - tighten_dist
+                             : g_entry_price + tighten_dist;
+      if(MathAbs(exit_price - mae_guard_sl) / pip <= 3.0)
+         close_reason = "MAE_GUARD";
      }
 
    //--- Open CSV in common files folder (FILE_READ|FILE_WRITE does not truncate)
@@ -525,6 +541,32 @@ void OnTick()
    if(position_open)
      {
       UpdateMFEMAE();
+
+      //--- MAE Guard: tighten SL when adverse excursion is large but trade hasn't moved in our favour
+      if(UseMAEGuard && !g_mae_guard_applied && g_sl_price != 0 && g_tp_price != 0)
+        {
+         double pip              = PipSize();
+         double orig_sl_dist_pips = MathAbs(g_entry_price - g_sl_price) / pip;
+         double tp_dist_pips      = MathAbs(g_tp_price    - g_entry_price) / pip;
+
+         if(g_mae_pips >= (MAEGuardPct / 100.0) * orig_sl_dist_pips &&
+            g_mfe_pips <  (30.0        / 100.0) * tp_dist_pips)
+           {
+            double tighten_dist = (MAEGuardTighten / 100.0) * MathAbs(g_entry_price - g_sl_price);
+            double new_sl       = (g_direction == "BUY")
+                                  ? g_entry_price - tighten_dist
+                                  : g_entry_price + tighten_dist;
+
+            ulong ticket = (ulong)PositionGetInteger(POSITION_TICKET);
+            if(ExtTrade.PositionModify(ticket, new_sl, g_tp_price))
+              {
+               g_mae_guard_applied = true;
+               Print("MAE Guard triggered | ticket:", ticket,
+                     " | new SL:", DoubleToString(new_sl, _Digits));
+              }
+           }
+        }
+
       ApplyTrailingStop();
       CheckTradeAlerts();
      }
