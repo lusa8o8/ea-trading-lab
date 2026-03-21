@@ -257,7 +257,7 @@ void LogTradeToCSV(ulong deal_ticket)
      }
 
    //--- Open CSV in common files folder (FILE_READ|FILE_WRITE does not truncate)
-   string csv_file = "trade_log_" + _Symbol + ".csv";
+   string csv_file = "trade_log_" + _Symbol + "_" + TimeframeToString(_Period) + ".csv";
    int fh = FileOpen(csv_file, FILE_READ | FILE_WRITE | FILE_ANSI | FILE_COMMON);
    if(fh == INVALID_HANDLE)
      {
