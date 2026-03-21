@@ -89,7 +89,12 @@ string TimeframeToString(ENUM_TIMEFRAMES tf)
       case PERIOD_M15: return "M15";
       case PERIOD_M30: return "M30";
       case PERIOD_H1:  return "H1";
+      case PERIOD_H2:  return "H2";
+      case PERIOD_H3:  return "H3";
       case PERIOD_H4:  return "H4";
+      case PERIOD_H6:  return "H6";
+      case PERIOD_H8:  return "H8";
+      case PERIOD_H12: return "H12";
       case PERIOD_D1:  return "D1";
       default:         return EnumToString(tf);
      }
