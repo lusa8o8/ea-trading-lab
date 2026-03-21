@@ -497,8 +497,8 @@ void OnTick()
 
    //--- Backtest fallback: OnTradeTransaction may not fire in Strategy Tester.
    //--- Detect open→closed transition and log the trade from history.
-   //--- g_entry_price guard prevents double-logging in live trading where
-   //--- OnTradeTransaction already called ResetTradeState() first.
+   //--- g_entry_price guard prevents double-logging: if OnTradeTransaction already
+   //--- handled this close it will have called ResetTradeState() which zeros g_entry_price.
    if(g_position_was_open && !position_open && g_entry_price != 0)
      {
       ulong deal_ticket = FindLastCloseDeal();
@@ -539,6 +539,9 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 
    ENUM_DEAL_ENTRY de = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
    if(de != DEAL_ENTRY_OUT && de != DEAL_ENTRY_INOUT) return;
+
+   //--- Guard: if entry state is already zeroed, OnTick fallback already logged this close.
+   if(g_entry_price == 0) return;
 
    LogTradeToCSV(trans.deal);
    ResetTradeState();
