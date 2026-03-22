@@ -1,0 +1,4 @@
+project_id = "jzkjsocburpoaxtrkuix"
+
+[functions.score-trade]
+verify_jwt = true
