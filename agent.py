@@ -14,6 +14,10 @@ from pathlib import Path
 from datetime import datetime, date
 import anthropic
 
+# Force UTF-8 output on Windows so emoji in Claude responses don't crash the terminal
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # ---------------------------------------------------------------------------
 # Load credentials
 # ---------------------------------------------------------------------------
