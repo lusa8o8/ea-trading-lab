@@ -42,17 +42,19 @@ export default function ModeToggle({
         {/* Toggle pill */}
         <button
           onClick={() => onChange(isLive ? 'BACKTEST' : 'LIVE')}
-          className={`relative mt-0.5 flex-shrink-0 h-6 w-11 rounded-full border transition-colors focus:outline-none ${
-            isLive
-              ? 'bg-positive/15 border-positive/30'
-              : 'bg-[#1a1a1a] border-[#2a2a2a]'
+          className={`relative inline-flex items-center rounded-full transition-colors duration-200 focus:outline-none mt-0.5 flex-shrink-0 ${
+            isLive ? 'bg-green-500' : 'bg-gray-600'
           }`}
+          style={{ width: '44px', height: '24px', padding: '2px' }}
           aria-label="Toggle data mode"
         >
           <span
-            className={`absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform ${
-              isLive ? 'translate-x-[3px]' : 'translate-x-[22px]'
-            }`}
+            className="inline-block rounded-full bg-white transition-transform duration-200"
+            style={{
+              width: '20px',
+              height: '20px',
+              transform: isLive ? 'translateX(20px)' : 'translateX(0px)',
+            }}
           />
         </button>
 
