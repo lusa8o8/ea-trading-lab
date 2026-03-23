@@ -15,8 +15,8 @@ export default function ContextSection() {
           trades. Live trading began in March 2026.
         </p>
         <p className="text-[#e5e5e5] text-sm leading-relaxed">
-          Edge: MA crossover signals filtered by session, day of week, and ATR conditions. Risk is
-          sized algorithmically per trade based on confluence strength.
+          The system runs fully automated across four currency pairs. Risk is managed
+          algorithmically on every trade.
         </p>
         <p className="text-muted text-sm leading-relaxed">
           No profit guarantees. No hype. Just data.
