@@ -24,12 +24,15 @@ export type Trade = {
   source: string
   exit_time: string
   close_reason: string
+  score?: number | null
 }
 
 export type BrainObservation = {
   id?: number
   created_at: string
-  alert_active?: boolean
-  status?: string
+  observation_type?: string
+  resolved?: boolean
   message?: string
 }
+
+export type Mode = 'LIVE' | 'BACKTEST'

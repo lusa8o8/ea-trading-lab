@@ -1,4 +1,8 @@
-export default function Header({ hasAlert }: { hasAlert: boolean }) {
+import type { BrainObservation } from '@/lib/supabase'
+
+export default function Header({ latestObs }: { latestObs: BrainObservation | null }) {
+  const hasAlert = latestObs !== null
+
   return (
     <header className="flex items-start justify-between flex-wrap gap-4">
       <div>
@@ -13,7 +17,7 @@ export default function Header({ hasAlert }: { hasAlert: boolean }) {
         {hasAlert ? (
           <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded text-xs font-mono bg-yellow-950 text-yellow-400 border border-yellow-800">
             <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 shrink-0" />
-            Active alert
+            {latestObs.observation_type ?? 'Active alert'}
           </span>
         ) : (
           <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded text-xs font-mono bg-positive/10 text-positive border border-positive/30">

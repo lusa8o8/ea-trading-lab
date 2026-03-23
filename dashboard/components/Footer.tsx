@@ -1,12 +1,14 @@
-export default function Footer({ lastUpdated }: { lastUpdated: string }) {
-  const formatted = new Date(lastUpdated).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZoneName: 'short',
-  })
+export default function Footer({ lastUpdated }: { lastUpdated: string | null }) {
+  const formatted = lastUpdated
+    ? new Date(lastUpdated).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZoneName: 'short',
+      })
+    : null
 
   return (
     <footer className="border-t border-line pt-6 pb-10 flex flex-wrap items-center justify-between gap-4">
@@ -14,7 +16,7 @@ export default function Footer({ lastUpdated }: { lastUpdated: string }) {
         Built with data. Validated in public.
       </span>
       <div className="flex items-center gap-5 text-xs font-mono text-muted">
-        <span>Updated {formatted}</span>
+        {formatted && <span>Last trade: {formatted}</span>}
         <a
           href="https://github.com/lusa8o8/ea-trading-lab"
           target="_blank"

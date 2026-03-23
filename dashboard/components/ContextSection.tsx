@@ -11,8 +11,7 @@ export default function ContextSection() {
           Nothing is hidden. This dashboard updates in real time.
         </p>
         <p className="text-[#e5e5e5] text-sm leading-relaxed">
-          The system is currently in paper trading validation. The backtest covers 3 years and 484
-          trades. Live trading began in March 2026.
+          The system is currently in paper trading validation. Live trading began March 2026.
         </p>
         <p className="text-[#e5e5e5] text-sm leading-relaxed">
           The system runs fully automated across four currency pairs. Risk is managed
