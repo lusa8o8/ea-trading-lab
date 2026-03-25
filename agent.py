@@ -119,6 +119,8 @@ November — MONITOR ONLY: brain watches, logs observations, no automatic risk r
 4. SCORING_SHIFT — quarterly: compare live A+ performance vs 3-year baseline per pair
 5. DRAWDOWN_ALERT — drawdown from peak exceeds 5%
 6. STREAK_WARNING — 5+ consecutive losses on any single pair
+7. VALIDATION_PENDING — standing reminders that scoring models and seasonal filters are
+   unproven on live data; auto-seeded at startup; cleared only when sample thresholds met
 
 === RULES ===
 1. Never guess. Discovery and diagnosis before any conclusion.
@@ -148,7 +150,19 @@ Table: account_snapshots
 Table: brain_observations
   id, observation_date, pair, observation_type, message, data_context, resolved, created_at
   Observation types: WITHDRAWAL_READY, CONSISTENCY_RISK, SEASONAL_WARNING,
-                     SCORING_SHIFT, DRAWDOWN_ALERT, STREAK_WARNING
+                     SCORING_SHIFT, DRAWDOWN_ALERT, STREAK_WARNING, VALIDATION_PENDING
+
+=== SCORING BASELINES (BACKTEST — used for SCORING_SHIFT comparisons) ===
+NZDUSD: A+ avg R = 0.95 | Score 1 avg R = 0.45 | Score 0 avg R = -0.14
+USDCAD: A+ avg R = 0.45 | Score 1 avg R = 0.06 | Score 0 avg R = -0.17
+AUDUSD: A+ avg R = 1.18 | Score 1 avg R = 0.09 | Score 0 avg R = -0.13
+SCORING_SHIFT fires when live tier avg R diverges more than 0.3R below baseline.
+Insufficient sample (< 30 trades per tier): report count only — no SCORING_SHIFT fired.
+
+=== TOOLS ADDED IN PHASE 7+ ===
+- run_quarterly_review(): full quarterly report — trades vs backtest, validation pending
+  status, score tier sample sizes, month performance vs expectations.
+- check_all_triggers(): now includes SCORING_SHIFT detection per pair.
 
 When you have data from a tool call, analyse it thoroughly before responding.
 Always check for brain triggers after any performance analysis.
@@ -465,17 +479,136 @@ def resolve_brain_observation(observation_id: str) -> dict:
     return {"resolved": True, "id": observation_id}
 
 
+# ---------------------------------------------------------------------------
+# Validation seed observations — standing reminders about unproven models
+# ---------------------------------------------------------------------------
+VALIDATION_SEEDS = [
+    {
+        "pair": "NZDUSD",
+        "message": (
+            "Scoring model (Hr 10/14/16 + Thursday) never backtested. "
+            "Minimum 30 trades per score tier required before conclusions."
+        ),
+    },
+    {
+        "pair": "USDCAD",
+        "message": (
+            "Scoring model (Hr 14/16 + Tuesday) never backtested. "
+            "Minimum 30 trades per score tier required before conclusions."
+        ),
+    },
+    {
+        "pair": "AUDUSD",
+        "message": (
+            "Scoring model (Hr 12 + Wed/Thu) never backtested. "
+            "Minimum 30 trades per score tier required before conclusions."
+        ),
+    },
+    {
+        "pair": "EURJPY",
+        "message": (
+            "Trail B + MAE guard live performance unproven. "
+            "Minimum 50 live trades required before conclusions."
+        ),
+    },
+    {
+        "pair": "ALL",
+        "message": (
+            "August 0.5% seasonal filter unproven on live data. "
+            "Requires 3 live Augusts to validate."
+        ),
+    },
+    {
+        "pair": "ALL",
+        "message": (
+            "November hostile pattern based on 3 backtest years only. "
+            "Requires 3 live Novembers to validate."
+        ),
+    },
+]
+
+
+def seed_validation_observations() -> dict:
+    """
+    Insert VALIDATION_PENDING observations for unproven models/filters.
+    Checks all existing rows (resolved or not) to avoid duplicates.
+    Safe to call every startup — idempotent.
+    """
+    existing_rows = supabase_query("brain_observations", {
+        "observation_type": "eq.VALIDATION_PENDING",
+        "select": "message",
+        "limit": 100,
+    })
+    existing_messages = {r["message"] for r in existing_rows}
+
+    inserted = []
+    for seed in VALIDATION_SEEDS:
+        if seed["message"] not in existing_messages:
+            write_brain_observation(
+                observation_type="VALIDATION_PENDING",
+                message=seed["message"],
+                pair=seed["pair"],
+            )
+            inserted.append(seed["pair"])
+
+    return {
+        "seeded": len(inserted),
+        "pairs_inserted": inserted,
+        "already_existed": len(VALIDATION_SEEDS) - len(inserted),
+    }
+
+
+def _derive_score_tier(session_hour, day_of_week, symbol: str) -> int:
+    """
+    Derive score tier (0/1/2) from session_hour and day_of_week
+    using the locked scoring model for each pair.
+    Returns -1 if inputs are missing.
+    """
+    if session_hour is None or day_of_week is None:
+        return -1
+
+    h = int(session_hour)
+    d = int(day_of_week)  # 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+
+    if symbol == "NZDUSD":
+        hour_hit = h in (10, 14, 16)
+        day_hit  = d == 3  # Thursday
+    elif symbol == "USDCAD":
+        if h == 12:
+            return 0  # Hour 12 always Score 0 regardless of day
+        hour_hit = h in (14, 16)
+        day_hit  = d == 1  # Tuesday
+    elif symbol == "AUDUSD":
+        hour_hit = h == 12
+        day_hit  = d in (2, 3)  # Wed or Thu
+    else:
+        return -1
+
+    return int(hour_hit) + int(day_hit)
+
+
+# Backtest avg R baselines per pair per tier — used for SCORING_SHIFT
+_SCORING_BASELINES = {
+    "NZDUSD": {2: 0.95,  1: 0.45,  0: -0.14},
+    "USDCAD": {2: 0.45,  1: 0.06,  0: -0.17},
+    "AUDUSD": {2: 1.18,  1: 0.09,  0: -0.13},
+}
+_SCORING_SHIFT_THRESHOLD = 0.30   # fire if live avg R is this far below baseline
+_SCORING_MIN_SAMPLE      = 30     # minimum trades per tier before comparison is valid
+
+
 def check_all_triggers() -> dict:
     """
     Run a full trigger sweep across all pairs.
+    Checks: SEASONAL_WARNING, STREAK_WARNING, SCORING_SHIFT.
     Returns a summary of any triggers that fired.
     """
-    pairs   = ["EURJPY", "NZDUSD", "USDCAD", "AUDUSD"]
-    fired   = []
-    today   = date.today()
-    month   = today.month
+    pairs = ["EURJPY", "NZDUSD", "USDCAD", "AUDUSD"]
+    fired = []
+    today = date.today()
+    month = today.month
 
-    # SEASONAL_WARNING
+    # ── SEASONAL_WARNING ────────────────────────────────────────────
     if month == 8:
         fired.append({
             "trigger": "SEASONAL_WARNING",
@@ -489,20 +622,226 @@ def check_all_triggers() -> dict:
             "detail":  "November — MONITOR ONLY. Watch performance, no automatic reduction.",
         })
 
-    # STREAK_WARNING per pair
+    # ── STREAK_WARNING per pair ──────────────────────────────────────
     for sym in pairs:
-        dd = get_drawdown_analysis(sym)
+        dd = get_drawdown_analysis(sym, source="LIVE")
         if dd.get("streak_warning"):
             fired.append({
                 "trigger": "STREAK_WARNING",
                 "pair":    sym,
-                "detail":  f"{dd['max_consec_losses']} consecutive losses on {sym}.",
+                "detail":  f"{dd['max_consec_losses']} consecutive losses on {sym} (LIVE).",
+            })
+
+    # ── SCORING_SHIFT — NZDUSD, USDCAD, AUDUSD ──────────────────────
+    scoring_pairs = ["NZDUSD", "USDCAD", "AUDUSD"]
+    for sym in scoring_pairs:
+        trades = supabase_query("trades", {
+            "symbol":  f"eq.{sym}",
+            "source":  "eq.LIVE",
+            "select":  "session_hour,day_of_week,r_multiple",
+        })
+        if not trades:
+            continue
+
+        # Group by derived score tier
+        tiers: dict[int, list] = {0: [], 1: [], 2: []}
+        skipped = 0
+        for t in trades:
+            r = t.get("r_multiple")
+            if r is None:
+                continue
+            tier = _derive_score_tier(t.get("session_hour"), t.get("day_of_week"), sym)
+            if tier == -1:
+                skipped += 1
+                continue
+            tiers[tier].append(r)
+
+        baselines = _SCORING_BASELINES[sym]
+        tier_summaries = {}
+        shift_detected = False
+
+        for tier_key in (2, 1, 0):
+            r_vals    = tiers[tier_key]
+            n         = len(r_vals)
+            baseline  = baselines[tier_key]
+            label     = {2: "A+", 1: "Score1", 0: "Score0"}[tier_key]
+
+            if n == 0:
+                tier_summaries[label] = {
+                    "trades": 0, "avg_r": None, "baseline": baseline,
+                    "status": f"INSUFFICIENT SAMPLE (0/{_SCORING_MIN_SAMPLE}) — monitoring only",
+                }
+                continue
+
+            avg_r = round(sum(r_vals) / n, 3)
+
+            if n < _SCORING_MIN_SAMPLE:
+                tier_summaries[label] = {
+                    "trades": n, "avg_r": avg_r, "baseline": baseline,
+                    "status": (
+                        f"INSUFFICIENT SAMPLE ({n}/{_SCORING_MIN_SAMPLE}) — monitoring only"
+                    ),
+                }
+            else:
+                divergence = avg_r - baseline
+                if divergence < -_SCORING_SHIFT_THRESHOLD:
+                    shift_detected = True
+                    status = (
+                        f"SHIFT DETECTED — live {avg_r:+.3f}R vs baseline {baseline:+.3f}R "
+                        f"(divergence {divergence:+.3f}R)"
+                    )
+                else:
+                    status = f"OK — live {avg_r:+.3f}R vs baseline {baseline:+.3f}R"
+
+                tier_summaries[label] = {
+                    "trades": n, "avg_r": avg_r, "baseline": baseline,
+                    "status": status,
+                }
+
+        if shift_detected:
+            fired.append({
+                "trigger": "SCORING_SHIFT",
+                "pair":    sym,
+                "detail":  f"Live scoring divergence detected on {sym}.",
+                "tiers":   tier_summaries,
+            })
+        else:
+            # Still report scoring status even when no shift
+            fired.append({
+                "trigger": "SCORING_STATUS",
+                "pair":    sym,
+                "detail":  f"No scoring shift on {sym}.",
+                "tiers":   tier_summaries,
             })
 
     return {
-        "checked_at": today.isoformat(),
-        "triggers_fired": len(fired),
-        "details": fired,
+        "checked_at":     today.isoformat(),
+        "triggers_fired": sum(1 for f in fired if f["trigger"] != "SCORING_STATUS"),
+        "details":        fired,
+    }
+
+
+def run_quarterly_review() -> dict:
+    """
+    Full quarterly performance review.
+    - Current quarter dates
+    - Live trades for the quarter vs backtest quarterly avg
+    - VALIDATION_PENDING observation status with current live trade counts
+    - Score tier sample sizes and 30-trade threshold progress
+    - Monthly performance vs backtest expectations
+    """
+    today  = date.today()
+    year   = today.year
+    q      = (today.month - 1) // 3 + 1
+    q_start_month = (q - 1) * 3 + 1
+    q_start = date(year, q_start_month, 1).isoformat()
+    # Quarter end is last day of the 3rd month of the quarter
+    q_end_month = q_start_month + 2
+    q_end_day   = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][q_end_month - 1]
+    if q_end_month == 2 and (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)):
+        q_end_day = 29
+    q_end = date(year, q_end_month, q_end_day).isoformat()
+
+    # ── Live trades for the quarter ──────────────────────────────────
+    quarter_trades = supabase_query("trades", {
+        "source":    "eq.LIVE",
+        "open_time": f"gte.{q_start}",
+        "select":    "symbol,r_multiple,open_time,session_hour,day_of_week",
+        "order":     "open_time.asc",
+    })
+
+    # Total quarter R per pair
+    pair_q_totals: dict[str, list] = {}
+    for t in quarter_trades:
+        sym = t.get("symbol", "UNKNOWN")
+        r   = t.get("r_multiple")
+        if r is not None:
+            pair_q_totals.setdefault(sym, []).append(r)
+
+    # Backtest monthly expectations (R at flat 1% risk)
+    backtest_monthly_r = {
+        "EURJPY": 0.77,
+        "NZDUSD": 0.76,
+        "USDCAD": 0.18,
+        "AUDUSD": 0.29,
+    }
+    pair_quarterly_summary = {}
+    for sym, r_list in pair_q_totals.items():
+        actual_q_r   = round(sum(r_list), 2)
+        expected_q_r = round(backtest_monthly_r.get(sym, 0) * 3, 2)  # 3 months
+        pair_quarterly_summary[sym] = {
+            "trades":          len(r_list),
+            "actual_r":        actual_q_r,
+            "expected_q_r":    expected_q_r,
+            "vs_expectation":  round(actual_q_r - expected_q_r, 2),
+        }
+
+    # ── Monthly breakdown for the quarter ───────────────────────────
+    monthly_actual: dict[str, dict] = {}
+    for t in quarter_trades:
+        ot = t.get("open_time")
+        r  = t.get("r_multiple")
+        if not ot or r is None:
+            continue
+        month_key = ot[:7]
+        monthly_actual.setdefault(month_key, {"trades": 0, "total_r": 0.0})
+        monthly_actual[month_key]["trades"]  += 1
+        monthly_actual[month_key]["total_r"] += r
+    for mk in monthly_actual:
+        monthly_actual[mk]["total_r"] = round(monthly_actual[mk]["total_r"], 2)
+
+    # ── VALIDATION_PENDING status ────────────────────────────────────
+    pending_obs = supabase_query("brain_observations", {
+        "observation_type": "eq.VALIDATION_PENDING",
+        "resolved":         "eq.false",
+        "select":           "id,pair,message",
+        "limit":            20,
+    })
+
+    # Score tier sample sizes (all LIVE trades, not just this quarter)
+    scoring_pairs  = ["NZDUSD", "USDCAD", "AUDUSD"]
+    tier_samples   = {}
+    for sym in scoring_pairs:
+        all_live = supabase_query("trades", {
+            "symbol": f"eq.{sym}",
+            "source": "eq.LIVE",
+            "select": "session_hour,day_of_week,r_multiple",
+        })
+        counts = {2: 0, 1: 0, 0: 0}
+        for t in all_live:
+            if t.get("r_multiple") is None:
+                continue
+            tier = _derive_score_tier(t.get("session_hour"), t.get("day_of_week"), sym)
+            if tier in counts:
+                counts[tier] += 1
+        tier_samples[sym] = {
+            "A+":     {"count": counts[2], "threshold": 30, "met": counts[2] >= 30},
+            "Score1": {"count": counts[1], "threshold": 30, "met": counts[1] >= 30},
+            "Score0": {"count": counts[0], "threshold": 30, "met": counts[0] >= 30},
+        }
+
+    # EURJPY live trade count vs 50-trade threshold
+    eurjpy_live_count = len(supabase_query("trades", {
+        "symbol": "eq.EURJPY",
+        "source": "eq.LIVE",
+        "select": "trade_id",
+    }))
+
+    return {
+        "quarter":              f"Q{q} {year}",
+        "quarter_range":        f"{q_start} → {q_end}",
+        "today":                today.isoformat(),
+        "quarter_trades_total": len(quarter_trades),
+        "pair_quarterly_vs_expectation": pair_quarterly_summary,
+        "monthly_breakdown":    monthly_actual,
+        "validation_pending_open": len(pending_obs),
+        "validation_pending_obs":  [
+            {"pair": o["pair"], "message": o["message"]} for o in pending_obs
+        ],
+        "score_tier_samples":   tier_samples,
+        "eurjpy_live_trades":   eurjpy_live_count,
+        "eurjpy_threshold":     50,
+        "eurjpy_threshold_met": eurjpy_live_count >= 50,
     }
 
 
@@ -604,7 +943,8 @@ TOOLS = [
                 "observation_type": {
                     "type": "string",
                     "enum": ["WITHDRAWAL_READY", "CONSISTENCY_RISK", "SEASONAL_WARNING",
-                             "SCORING_SHIFT", "DRAWDOWN_ALERT", "STREAK_WARNING"],
+                             "SCORING_SHIFT", "DRAWDOWN_ALERT", "STREAK_WARNING",
+                             "VALIDATION_PENDING"],
                 },
                 "message":     {"type": "string"},
                 "pair":        {"type": "string"},
@@ -651,7 +991,25 @@ TOOLS = [
     },
     {
         "name":        "check_all_triggers",
-        "description": "Run a full trigger sweep — seasonal warnings, streak warnings — across all pairs.",
+        "description": (
+            "Run a full trigger sweep — seasonal warnings, streak warnings, and "
+            "SCORING_SHIFT detection — across all pairs. Includes per-tier live vs "
+            "backtest comparison for NZDUSD, USDCAD, AUDUSD."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name":        "run_quarterly_review",
+        "description": (
+            "Full quarterly performance report: live R vs backtest expectation per pair, "
+            "monthly breakdown, all VALIDATION_PENDING observation statuses with current "
+            "live trade counts, score tier sample sizes vs 30-trade threshold, "
+            "EURJPY live count vs 50-trade threshold."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -673,6 +1031,7 @@ TOOL_FN_MAP = {
     "get_account_snapshots":   get_account_snapshots,
     "resolve_brain_observation": resolve_brain_observation,
     "check_all_triggers":      check_all_triggers,
+    "run_quarterly_review":    run_quarterly_review,
 }
 
 # ---------------------------------------------------------------------------
@@ -759,6 +1118,18 @@ def main():
         print("\n" + memory_context)
     else:
         print("\n(No unresolved brain observations.)")
+
+    # Seed VALIDATION_PENDING observations for unproven models/filters
+    try:
+        seed_result = seed_validation_observations()
+        if seed_result["seeded"] > 0:
+            print(f"\n[startup] Seeded {seed_result['seeded']} VALIDATION_PENDING "
+                  f"observation(s): {', '.join(seed_result['pairs_inserted'])}")
+        else:
+            print(f"\n[startup] All {seed_result['already_existed']} VALIDATION_PENDING "
+                  f"observations already exist — nothing to seed.")
+    except Exception as e:
+        print(f"\n[startup] Could not seed validation observations: {e}")
 
     print("\nType your question. Type 'exit' or 'quit' to end the session.")
     print("-" * 60)
