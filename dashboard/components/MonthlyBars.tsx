@@ -54,7 +54,7 @@ export default function MonthlyBars({
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <BarChart data={data ?? []} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" vertical={false} />
               <XAxis
                 dataKey="month"

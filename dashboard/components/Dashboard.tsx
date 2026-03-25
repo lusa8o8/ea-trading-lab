@@ -69,24 +69,27 @@ export default function Dashboard() {
 
   // ── Derived stats ──────────────────────────────────────────────────
 
+  // Only closed trades have exit_time — open positions must be excluded from all time-series work
+  const closedTrades = trades.filter((t) => t.exit_time != null)
+
   const noLiveData = mode === 'LIVE' && trades.length === 0
 
-  const totalR = trades.length > 0
-    ? trades.reduce((s, t) => s + (t.r_multiple ?? 0), 0)
+  const totalR = closedTrades.length > 0
+    ? closedTrades.reduce((s, t) => s + (t.r_multiple ?? 0), 0)
     : null
 
-  const wins = trades.filter((t) => t.result === 'WIN').length
-  const winRate = trades.length > 0 ? (wins / trades.length) * 100 : null
-  const avgR = trades.length > 0
-    ? trades.reduce((s, t) => s + (t.r_multiple ?? 0), 0) / trades.length
+  const wins = closedTrades.filter((t) => t.result === 'WIN').length
+  const winRate = closedTrades.length > 0 ? (wins / closedTrades.length) * 100 : null
+  const avgR = closedTrades.length > 0
+    ? closedTrades.reduce((s, t) => s + (t.r_multiple ?? 0), 0) / closedTrades.length
     : null
 
   // Drawdown
   let drawdown: number | null = null
   if (mode === 'BACKTEST' && snapshots.length > 0) {
     drawdown = snapshots[snapshots.length - 1]?.drawdown_pct ?? null
-  } else if (mode === 'LIVE' && trades.length > 0) {
-    const sorted = [...trades].sort(
+  } else if (mode === 'LIVE' && closedTrades.length > 0) {
+    const sorted = [...closedTrades].sort(
       (a, b) => new Date(a.exit_time).getTime() - new Date(b.exit_time).getTime()
     )
     let cum = 0, peak = 0, maxDD = 0
@@ -103,15 +106,15 @@ export default function Dashboard() {
 
   const equityData: { x: string; y: number }[] =
     mode === 'BACKTEST'
-      ? snapshots.map((s) => ({ x: s.month, y: s.balance }))
+      ? (snapshots ?? []).map((s) => ({ x: s.month, y: s.balance }))
       : (() => {
-          const sorted = [...trades].sort(
+          const sorted = [...closedTrades].sort(
             (a, b) => new Date(a.exit_time).getTime() - new Date(b.exit_time).getTime()
           )
           let cum = 0
           return sorted.map((t) => {
             cum += t.r_multiple ?? 0
-            return { x: t.exit_time.slice(0, 10), y: parseFloat(cum.toFixed(2)) }
+            return { x: (t.exit_time ?? '').slice(0, 10), y: parseFloat(cum.toFixed(2)) }
           })
         })()
 
@@ -119,10 +122,10 @@ export default function Dashboard() {
 
   const monthlyData: { month: string; value: number }[] =
     mode === 'BACKTEST'
-      ? snapshots.map((s) => ({ month: s.month, value: s.monthly_pct }))
+      ? (snapshots ?? []).map((s) => ({ month: s.month, value: s.monthly_pct }))
       : (() => {
           const map = new Map<string, number>()
-          for (const t of trades) {
+          for (const t of closedTrades) {
             const month = t.exit_time?.slice(0, 7)
             if (!month) continue
             map.set(month, (map.get(month) ?? 0) + (t.r_multiple ?? 0))
@@ -138,7 +141,7 @@ export default function Dashboard() {
     string,
     { symbol: string; timeframe: string; wins: number; total: number; rSum: number }
   >()
-  for (const t of trades) {
+  for (const t of closedTrades) {
     const key = `${t.symbol}|${t.timeframe}`
     const p = pairMap.get(key) ?? {
       symbol: t.symbol,
@@ -176,7 +179,7 @@ export default function Dashboard() {
     { key: 0, label: 'Score 0' },
   ]
   const scoringRows = SCORE_TIERS.map(({ key, label }) => {
-    const tierTrades = trades.filter((t) => t.score === key)
+    const tierTrades = closedTrades.filter((t) => t.score === key)
     const count = tierTrades.length
     const tierAvgR =
       count > 0
@@ -210,7 +213,7 @@ export default function Dashboard() {
 
         <PairTable mode={mode} pairStats={pairStats} loading={loading} />
 
-        <TradesFeed mode={mode} trades={trades.slice(0, 20)} loading={loading} />
+        <TradesFeed mode={mode} trades={(trades ?? []).slice(0, 20)} loading={loading} />
 
         {mode === 'LIVE' && (
           <ScoringImpact rows={scoringRows} loading={loading} />
